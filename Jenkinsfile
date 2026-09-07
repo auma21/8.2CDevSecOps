@@ -1,99 +1,213 @@
+// =============================================================================
+// TASK 7.1C
+// DEVSECOPS PIPELINE WITH EXTENDED EMAIL NOTIFICATIONS
+// Platform: Windows Jenkins
+// Repository: https://github.com/auma21/8.2CDevSecOps.git
+//
+// Part 1 - Task 2:
+//   - Checkout nodejs-goof
+//   - Install dependencies
+//   - Run tests
+//   - Generate coverage report
+//   - Run npm audit security scan
+//
+// Part 2 - Task 2:
+//   - Send an email after Run Tests
+//   - Send an email after NPM Audit
+//   - Report SUCCESS or FAILURE
+//   - Attach stage-specific logs
+//   - Attach Jenkins console log
+// =============================================================================
+
 pipeline {
+
+    // =========================================================================
+    // AGENT
+    // =========================================================================
     agent any
 
-    // ========================================================================
+
+    // =========================================================================
     // PIPELINE OPTIONS
-    // ========================================================================
+    // =========================================================================
     options {
+
         /*
-         * The source repository is explicitly checked out in the Checkout
-         * stage, so Jenkins' normal workspace checkout is disabled.
+         * Jenkins normally performs an automatic SCM checkout when the
+         * Jenkinsfile is loaded from source control.
+         *
          */
         skipDefaultCheckout(true)
 
         /*
-         * Adds timestamps to console messages, improving the audit trail.
+         * Add timestamps to the Jenkins Console Output.
          */
         timestamps()
     }
 
-    // ========================================================================
+
+    // =========================================================================
     // AUTOMATIC GITHUB POLLING
-    // ========================================================================
+    // =========================================================================
     triggers {
+
         /*
-         * Jenkins periodically polls the GitHub repository for new commits.
-         * The task permits scheduled polling instead of a GitHub webhook.
+         * Jenkins checks the GitHub repository approximately every two minutes
+         * for a new commit.
+         *
+         * Allows SCM polling instead of a GitHub webhook.
          */
         pollSCM('H/2 * * * *')
     }
 
-    // ========================================================================
-    // PIPELINE VARIABLES
-    // ========================================================================
+
+    // =========================================================================
+    // GLOBAL ENVIRONMENT VARIABLES
+    // =========================================================================
     environment {
+
+        /*
+         * GitHub repository containing the nodejs-goof project.
+         */
         REPO_URL = 'https://github.com/auma21/8.2CDevSecOps.git'
 
+        /*
+         * Email address that should receive Jenkins notifications.
+         */
         EMAIL_TO = 'aumarbles@gmail.com'
 
+        /*
+         * Initial values.
+         *
+         * These values are replaced with SUCCESS or FAILURE when the
+         * corresponding commands execute.
+         */
         TEST_STAGE_STATUS = 'NOT_RUN'
 
         SECURITY_STAGE_STATUS = 'NOT_RUN'
+
+        COVERAGE_STAGE_STATUS = 'NOT_RUN'
     }
 
+
+    // =========================================================================
+    // PIPELINE STAGES
+    // =========================================================================
     stages {
 
-        // ====================================================================
-        // STAGE 1: CHECKOUT
-        // Task: Retrieve the application source code.
-        // Tool: Git / GitHub
-        // ====================================================================
-        stage('Checkout') {
-            steps {
-                echo 'Checking out nodejs-goof from GitHub...'
 
-                git branch: 'main',
+        // =====================================================================
+        // STAGE 1: CHECKOUT
+        //
+        // Task:
+        // Retrieve the nodejs-goof project from GitHub.
+        //
+        // Tool:
+        // Git / GitHub
+        // =====================================================================
+        stage('Checkout') {
+
+            steps {
+
+                echo '=========================================================='
+                echo 'STAGE 1: CHECKOUT'
+                echo 'Tool: Git / GitHub'
+                echo '=========================================================='
+
+                /*
+                 * Remove files left over from previous builds.
+                 *
+                 * This is particularly important for the logs directory.
+                 * Otherwise an old log could accidentally be attached to a
+                 * new email.
+                 */
+                deleteDir()
+
+                echo "Checking out repository:"
+                echo "${env.REPO_URL}"
+
+                git(
+                    branch: 'main',
                     url: "${env.REPO_URL}"
+                )
+
+                echo 'Repository checkout completed.'
             }
         }
 
-        // ====================================================================
-        // STAGE 2: INSTALL DEPENDENCIES
-        // Task: Install dependencies declared by the Node.js application.
-        // Tool: npm
-        // ====================================================================
-        stage('Install Dependencies') {
-            steps {
-                echo 'Verifying Node.js and npm...'
 
+        // =====================================================================
+        // STAGE 2: INSTALL DEPENDENCIES
+        //
+        // Task:
+        // Install dependencies defined in package.json.
+        //
+        // Tool:
+        // npm
+        // =====================================================================
+        stage('Install Dependencies') {
+
+            steps {
+
+                echo '=========================================================='
+                echo 'STAGE 2: INSTALL DEPENDENCIES'
+                echo 'Tool: npm'
+                echo '=========================================================='
+
+                /*
+                 * Verifying that Jenkins can locate Node.js and npm.
+                 */
                 bat 'node --version'
                 bat 'npm --version'
 
-                echo 'Installing project dependencies...'
-
+                echo 'Installing Node.js dependencies...'
                 bat 'npm install'
+
+                echo 'Dependency installation completed.'
             }
         }
 
-        // ====================================================================
+
+        // =====================================================================
         // STAGE 3: RUN TESTS
-        // Task: Execute the test command configured in package.json.
-        // Tool: npm / Snyk CLI as currently invoked by nodejs-goof
-        // ====================================================================
+        //
+        // Task:
+        // Execute the test command configured by nodejs-goof.
+        //
+        // Tool:
+        // npm / project-configured test tool
+        //
+        // Important:
+        // The current nodejs-goof npm test command invokes Snyk.
+        // Without Snyk authentication this can return a non-zero exit code.
+        //
+        // =====================================================================
         stage('Run Tests') {
+
             steps {
+
                 script {
+
+                    echo '=========================================================='
+                    echo 'STAGE 3: RUN TESTS'
+                    echo 'Tool: npm / project-configured test command'
+                    echo '=========================================================='
+
+                    /*
+                     * Create a folder for stage-specific logs.
+                     */
+                    bat 'if not exist logs mkdir logs'
 
                     echo 'Running npm test...'
 
-                    // Create the log directory when required.
-                    bat 'if not exist logs mkdir logs'
-
                     /*
-                     * returnStatus prevents a non-zero npm exit code from
-                     * terminating the complete Jenkins Pipeline.
+                     * Execute npm test and save all output in npm-test.log.
                      *
-                     * The command output is written to npm-test.log.
+                     * returnStatus: true prevents a non-zero exit code from
+                     * immediately terminating the whole pipeline.
+                     *
+                     * The actual return code is stored so the notification
+                     * can accurately report SUCCESS or FAILURE.
                      */
                     int testExitCode = bat(
                         returnStatus: true,
@@ -103,122 +217,261 @@ pipeline {
                         '''
                     )
 
+                    echo "npm test exit code = ${testExitCode}"
+
                     /*
-                     * Determine the real result of the test operation.
+                     * Determine the real test result.
                      */
                     if (testExitCode == 0) {
+
                         env.TEST_STAGE_STATUS = 'SUCCESS'
 
                         echo 'Run Tests completed successfully.'
+
                     } else {
+
                         env.TEST_STAGE_STATUS = 'FAILURE'
 
                         echo "Run Tests returned exit code ${testExitCode}."
 
                         /*
-                         * Mark this particular stage as failed while allowing
-                         * the overall Pipeline to continue.
+                         * Mark this Jenkins stage as failed while allowing
+                         * subsequent stages to continue.
+                         *
+                         * buildResult: SUCCESS
+                         *      The overall demonstration pipeline continues.
+                         *
+                         * stageResult: FAILURE
+                         *      Jenkins visually identifies this stage as
+                         *      unsuccessful.
                          */
                         catchError(
                             buildResult: 'SUCCESS',
                             stageResult: 'FAILURE'
                         ) {
+
                             error(
                                 "Run Tests failed with exit code ${testExitCode}."
                             )
                         }
                     }
 
-                    // Display the saved test output in Jenkins Console Output.
+                    /*
+                     * Display the saved test output in Jenkins Console Output.
+                     */
+                    echo '---------------- TEST LOG ----------------'
+
                     bat 'type logs\\npm-test.log'
+
+                    echo '-------------- END TEST LOG --------------'
+
+                    /*
+                     * Diagnostic message confirming the value that will be
+                     * used by the stage post block.
+                     */
+                    echo "Final Run Tests status = ${env.TEST_STAGE_STATUS}"
                 }
             }
 
-            // ================================================================
-            // EMAIL 1: TEST-STAGE NOTIFICATION
-            // ================================================================
+
+            // =================================================================
+            // TEST-STAGE EMAIL NOTIFICATION
+            //
+            // IMPORTANT:
+            // This post block is INSIDE the Run Tests stage.
+            //
+            // Therefore it executes only after Run Tests has finished and
+            // TEST_STAGE_STATUS has been changed from NOT_RUN.
+            // =================================================================
             post {
+
                 always {
-                    emailext(
-                        to: "${env.EMAIL_TO}",
 
-                        subject:
-                            "[Jenkins] Run Tests ${env.TEST_STAGE_STATUS} - " +
-                            "${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    script {
 
-                        mimeType: 'text/html',
+                        echo '=========================================================='
+                        echo 'PREPARING RUN TESTS EMAIL'
+                        echo "TEST_STAGE_STATUS before email = ${env.TEST_STAGE_STATUS}"
+                        echo '=========================================================='
 
-                        body: """
-                            <h2>Jenkins Test Stage Notification</h2>
+                        emailext(
 
-                            <p>
-                                <b>Job:</b>
-                                ${env.JOB_NAME}
-                            </p>
+                            /*
+                             * Recipient.
+                             */
+                            to: "${env.EMAIL_TO}",
 
-                            <p>
-                                <b>Build Number:</b>
-                                ${env.BUILD_NUMBER}
-                            </p>
 
-                            <p>
-                                <b>Stage:</b>
-                                Run Tests
-                            </p>
+                            /*
+                             * Email subject contains:
+                             * - stage
+                             * - result
+                             * - Jenkins job
+                             * - build number
+                             */
+                            subject:
+                                "[Jenkins] Run Tests " +
+                                "${env.TEST_STAGE_STATUS} - " +
+                                "${env.JOB_NAME} " +
+                                "#${env.BUILD_NUMBER}",
 
-                            <p>
-                                <b>Status:</b>
-                                ${env.TEST_STAGE_STATUS}
-                            </p>
 
-                            <p>
-                                <b>Build URL:</b>
-                                ${env.BUILD_URL}
-                            </p>
+                            /*
+                             * HTML formatted message.
+                             */
+                            mimeType: 'text/html',
 
-                            <p>
-                                The Run Tests stage has completed.
-                                The stage-specific test log and Jenkins
-                                console log are attached for review.
-                            </p>
-                        """,
 
-                        /*
-                         * Attach the complete Jenkins console log.
-                         */
-                        attachLog: true,
+                            /*
+                             * Custom email body.
+                             */
+                            body: """
+                                <html>
+                                <body>
 
-                        /*
-                         * Compress the full Jenkins log to reduce attachment
-                         * size.
-                         */
-                        compressLog: true,
+                                    <h2>
+                                        Jenkins Test Stage Notification
+                                    </h2>
 
-                        /*
-                         * Attach the log produced specifically by npm test.
-                         */
-                        attachmentsPattern: 'logs/npm-test.log'
-                    )
+                                    <table border="1"
+                                           cellpadding="6"
+                                           cellspacing="0">
+
+                                        <tr>
+                                            <td>
+                                                <b>Job</b>
+                                            </td>
+
+                                            <td>
+                                                ${env.JOB_NAME}
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Build Number</b>
+                                            </td>
+
+                                            <td>
+                                                ${env.BUILD_NUMBER}
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Stage</b>
+                                            </td>
+
+                                            <td>
+                                                Run Tests
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Status</b>
+                                            </td>
+
+                                            <td>
+                                                ${env.TEST_STAGE_STATUS}
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Build URL</b>
+                                            </td>
+
+                                            <td>
+                                                <a href="${env.BUILD_URL}">
+                                                    ${env.BUILD_URL}
+                                                </a>
+                                            </td>
+                                        </tr>
+
+                                    </table>
+
+                                    <p>
+                                        The Run Tests stage has completed.
+                                    </p>
+
+                                    <p>
+                                        The stage-specific npm test log and
+                                        the Jenkins console log are attached
+                                        for review.
+                                    </p>
+
+                                    <p>
+                                        <b>Note:</b>
+                                        A FAILURE status indicates that the
+                                        project's configured npm test command
+                                        returned a non-zero exit code.
+                                        The pipeline is configured to continue
+                                        so that the remaining DevSecOps stages
+                                        can still execute.
+                                    </p>
+
+                                </body>
+                                </html>
+                            """,
+
+
+                            /*
+                             * Attach the complete Jenkins Console Output.
+                             */
+                            attachLog: true,
+
+
+                            /*
+                             * Compress the Jenkins Console Output attachment
+                             * to reduce email size.
+                             */
+                            compressLog: true,
+
+
+                            /*
+                             * Attach the dedicated test-stage log.
+                             */
+                            attachmentsPattern:
+                                'logs/npm-test.log'
+                        )
+
+                        echo 'Run Tests notification email processed.'
+                    }
                 }
             }
         }
 
-        // ====================================================================
+
+        // =====================================================================
         // STAGE 4: GENERATE COVERAGE REPORT
-        // Task: Attempt to generate the requested coverage information.
-        // Tool: npm
-        // ====================================================================
+        //
+        // Task:
+        // Execute the coverage command requested in the assessment.
+        //
+        // Tool:
+        // npm
+        //
+        // The pipeline continues if the command does not exist or fails.
+        // =====================================================================
         stage('Generate Coverage Report') {
+
             steps {
+
                 script {
 
-                    echo 'Attempting to generate coverage report...'
+                    echo '=========================================================='
+                    echo 'STAGE 4: GENERATE COVERAGE REPORT'
+                    echo 'Tool: npm'
+                    echo '=========================================================='
 
                     bat 'if not exist logs mkdir logs'
 
+                    echo 'Executing npm run coverage...'
+
                     /*
-                     * The assessment specifies that the Pipeline should
-                     * continue even if this command does not succeed.
+                     * Capture the actual return code without stopping the
+                     * overall pipeline.
                      */
                     int coverageExitCode = bat(
                         returnStatus: true,
@@ -228,34 +481,75 @@ pipeline {
                         '''
                     )
 
+                    echo "Coverage command exit code = ${coverageExitCode}"
+
                     if (coverageExitCode == 0) {
+
+                        env.COVERAGE_STAGE_STATUS = 'SUCCESS'
+
                         echo 'Coverage command completed successfully.'
+
                     } else {
+
+                        env.COVERAGE_STAGE_STATUS = 'FAILURE'
+
                         echo """
-                        Coverage command returned exit code
-                        ${coverageExitCode}. Pipeline will continue as
-                        required by the assessment.
+                            Coverage command returned exit code
+                            ${coverageExitCode}.
+                        """
+
+                        echo """
+                            Pipeline execution will continue as required by
+                            the assessment.
                         """
                     }
 
+                    echo '--------------- COVERAGE LOG ---------------'
+
                     bat 'type logs\\coverage.log'
+
+                    echo '------------- END COVERAGE LOG -------------'
+
+                    echo """
+                        Final Coverage status =
+                        ${env.COVERAGE_STAGE_STATUS}
+                    """
                 }
             }
         }
 
-        // ====================================================================
+
+        // =====================================================================
         // STAGE 5: NPM AUDIT SECURITY SCAN
-        // Task: Identify known dependency vulnerabilities.
-        // Tool: npm audit
-        // ====================================================================
+        //
+        // Task:
+        // Analyse Node.js dependencies for known vulnerabilities.
+        //
+        // Tool:
+        // npm audit
+        //
+        // nodejs-goof is intentionally vulnerable, so npm audit may
+        // legitimately return a non-zero exit code.
+        // =====================================================================
         stage('NPM Audit (Security Scan)') {
+
             steps {
+
                 script {
 
-                    echo 'Running npm audit security scan...'
+                    echo '=========================================================='
+                    echo 'STAGE 5: NPM AUDIT SECURITY SCAN'
+                    echo 'Tool: npm audit'
+                    echo '=========================================================='
 
                     bat 'if not exist logs mkdir logs'
 
+                    echo 'Running npm audit...'
+
+                    /*
+                     * Run the security scan and save its results in a
+                     * dedicated audit log.
+                     */
                     int auditExitCode = bat(
                         returnStatus: true,
                         script: '''
@@ -264,114 +558,257 @@ pipeline {
                         '''
                     )
 
+                    echo "npm audit exit code = ${auditExitCode}"
+
                     /*
-                     * npm audit normally returns a non-zero exit code when
-                     * vulnerabilities meeting its failure threshold exist.
+                     * Interpret the audit result.
+                     *
+                     * npm audit usually returns a non-zero value when
+                     * vulnerabilities meeting the configured severity
+                     * threshold are detected.
                      */
                     if (auditExitCode == 0) {
+
                         env.SECURITY_STAGE_STATUS = 'SUCCESS'
 
                         echo 'NPM Audit completed without a failing result.'
+
                     } else {
+
                         env.SECURITY_STAGE_STATUS = 'FAILURE'
 
-                        echo "NPM Audit returned exit code ${auditExitCode}."
+                        echo """
+                            NPM Audit returned exit code
+                            ${auditExitCode}.
+                        """
 
                         /*
-                         * Show the stage as failed while still completing
-                         * remaining Pipeline post-processing.
+                         * Mark this particular stage as failed while keeping
+                         * the overall Pipeline available for final
+                         * post-processing.
                          */
                         catchError(
                             buildResult: 'SUCCESS',
                             stageResult: 'FAILURE'
                         ) {
+
                             error(
-                                "Security scan identified issues. " +
+                                "NPM Audit identified security issues. " +
                                 "Exit code: ${auditExitCode}."
                             )
                         }
                     }
 
-                    // Display the vulnerability results in Jenkins.
+                    /*
+                     * Display the vulnerability report in Jenkins.
+                     */
+                    echo '--------------- NPM AUDIT LOG ---------------'
+
                     bat 'type logs\\npm-audit.log'
+
+                    echo '------------- END NPM AUDIT LOG -------------'
+
+                    /*
+                     * Verify the value before the stage's email post block.
+                     */
+                    echo """
+                        Final NPM Audit status =
+                        ${env.SECURITY_STAGE_STATUS}
+                    """
                 }
             }
 
-            // ================================================================
-            // EMAIL 2: SECURITY-SCAN NOTIFICATION
-            // ================================================================
+
+            // =================================================================
+            // SECURITY-SCAN EMAIL NOTIFICATION
+            //
+            // IMPORTANT:
+            // This block is INSIDE the NPM Audit stage and therefore executes
+            // only after SECURITY_STAGE_STATUS has been determined.
+            // =================================================================
             post {
+
                 always {
-                    emailext(
-                        to: "${env.EMAIL_TO}",
 
-                        subject:
-                            "[Jenkins] Security Scan " +
-                            "${env.SECURITY_STAGE_STATUS} - " +
-                            "${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    script {
 
-                        mimeType: 'text/html',
+                        echo '=========================================================='
+                        echo 'PREPARING NPM AUDIT EMAIL'
+                        echo """
+                            SECURITY_STAGE_STATUS before email =
+                            ${env.SECURITY_STAGE_STATUS}
+                        """
+                        echo '=========================================================='
 
-                        body: """
-                            <h2>Jenkins Security Scan Notification</h2>
+                        emailext(
 
-                            <p>
-                                <b>Job:</b>
-                                ${env.JOB_NAME}
-                            </p>
+                            to: "${env.EMAIL_TO}",
 
-                            <p>
-                                <b>Build Number:</b>
-                                ${env.BUILD_NUMBER}
-                            </p>
 
-                            <p>
-                                <b>Stage:</b>
-                                NPM Audit (Security Scan)
-                            </p>
+                            subject:
+                                "[Jenkins] Security Scan " +
+                                "${env.SECURITY_STAGE_STATUS} - " +
+                                "${env.JOB_NAME} " +
+                                "#${env.BUILD_NUMBER}",
 
-                            <p>
-                                <b>Status:</b>
-                                ${env.SECURITY_STAGE_STATUS}
-                            </p>
 
-                            <p>
-                                <b>Build URL:</b>
-                                ${env.BUILD_URL}
-                            </p>
+                            mimeType: 'text/html',
 
-                            <p>
-                                The npm audit security scan has completed.
-                                The stage-specific audit log and Jenkins
-                                console log are attached for review.
-                            </p>
-                        """,
 
-                        attachLog: true,
+                            body: """
+                                <html>
+                                <body>
 
-                        compressLog: true,
+                                    <h2>
+                                        Jenkins Security Scan Notification
+                                    </h2>
 
-                        attachmentsPattern: 'logs/npm-audit.log'
-                    )
+                                    <table border="1"
+                                           cellpadding="6"
+                                           cellspacing="0">
+
+                                        <tr>
+                                            <td>
+                                                <b>Job</b>
+                                            </td>
+
+                                            <td>
+                                                ${env.JOB_NAME}
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Build Number</b>
+                                            </td>
+
+                                            <td>
+                                                ${env.BUILD_NUMBER}
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Stage</b>
+                                            </td>
+
+                                            <td>
+                                                NPM Audit (Security Scan)
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Status</b>
+                                            </td>
+
+                                            <td>
+                                                ${env.SECURITY_STAGE_STATUS}
+                                            </td>
+                                        </tr>
+
+                                        <tr>
+                                            <td>
+                                                <b>Build URL</b>
+                                            </td>
+
+                                            <td>
+                                                <a href="${env.BUILD_URL}">
+                                                    ${env.BUILD_URL}
+                                                </a>
+                                            </td>
+                                        </tr>
+
+                                    </table>
+
+                                    <p>
+                                        The npm audit security scan has
+                                        completed.
+                                    </p>
+
+                                    <p>
+                                        The stage-specific npm audit log and
+                                        Jenkins console log are attached for
+                                        review.
+                                    </p>
+
+                                    <p>
+                                        <b>Interpretation:</b>
+                                        A FAILURE status may indicate that
+                                        npm audit successfully detected known
+                                        vulnerabilities in the intentionally
+                                        vulnerable nodejs-goof application.
+                                    </p>
+
+                                </body>
+                                </html>
+                            """,
+
+
+                            /*
+                             * Attach Jenkins Console Output.
+                             */
+                            attachLog: true,
+
+
+                            /*
+                             * Compress the Jenkins console log.
+                             */
+                            compressLog: true,
+
+
+                            /*
+                             * Attach the dedicated npm audit report.
+                             */
+                            attachmentsPattern:
+                                'logs/npm-audit.log'
+                        )
+
+                        echo 'Security Scan notification email processed.'
+                    }
                 }
             }
         }
     }
 
-    // ========================================================================
-    // PIPELINE POST-PROCESSING
-    // ========================================================================
+
+    // =========================================================================
+    // PIPELINE-LEVEL POST PROCESSING
+    //
+    // This block is separate from the two stage-level email post blocks.
+    //
+    // Its purpose is to archive the generated log files after the entire
+    // pipeline has completed.
+    // =========================================================================
     post {
+
         always {
 
+            echo '=========================================================='
+            echo 'PIPELINE POST-PROCESSING'
+            echo '=========================================================='
+
             /*
-             * Retain the generated logs within the Jenkins build as
-             * downloadable build artefacts.
+             * Preserve all generated logs as Jenkins build artefacts.
              */
             archiveArtifacts(
                 artifacts: 'logs/*.log',
                 allowEmptyArchive: true
             )
+
+            echo 'Generated logs archived as Jenkins build artefacts.'
+
+            echo "Run Tests status: ${env.TEST_STAGE_STATUS}"
+
+            echo """
+                Coverage status:
+                ${env.COVERAGE_STAGE_STATUS}
+            """
+
+            echo """
+                Security Scan status:
+                ${env.SECURITY_STAGE_STATUS}
+            """
 
             echo 'Task 7.1C DevSecOps Pipeline execution completed.'
         }
